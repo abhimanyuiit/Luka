@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>AI वॉइस असिस्टेंट · Live2D</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Mukta:wght@400;600;800&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#14101f; --bg2:#2a1330; --ink:#f3ecf0; --mute:#a597b0;
+  --red:#e0455f; --panel:rgba(30,22,44,.72); --line:rgba(255,255,255,.12);
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{
+  font-family:"Mukta","Noto Sans Devanagari",system-ui,sans-serif;color:var(--ink);
+  background:radial-gradient(120% 90% at 50% 20%,var(--bg2) 0%,var(--bg) 60%);
+  overflow:hidden;
+}
+#stage{position:fixed;inset:0}
+#canvas{width:100%;height:100%;display:block}
+#loading{position:fixed;inset:0;display:grid;place-items:center;font-size:1.1rem;color:var(--mute);z-index:5;
+  background:var(--bg);transition:opacity .5s}
+#loading.done{opacity:0;pointer-events:none}
+
+.top{position:fixed;top:0;left:0;right:0;display:flex;justify-content:space-between;align-items:center;
+  padding:calc(env(safe-area-inset-top,0px) + 12px) 16px 0;z-index:3;pointer-events:none}
+.top>*{pointer-events:auto}
+.badge{display:flex;align-items:center;gap:8px;font-weight:600;font-size:.95rem}
+.dot{width:10px;height:10px;border-radius:50%;background:var(--mute);transition:.25s}
+.dot.listening{background:#45e08b;box-shadow:0 0 0 6px rgba(69,224,139,.2)}
+.dot.thinking{background:#f0c246;box-shadow:0 0 0 6px rgba(240,194,70,.2)}
+.dot.speaking{background:var(--red);box-shadow:0 0 0 6px rgba(224,69,95,.25)}
+
+button{font:inherit;color:inherit;cursor:pointer}
+.icon{width:42px;height:42px;border-radius:50%;border:1px solid var(--line);background:var(--panel);
+  backdrop-filter:blur(10px);display:grid;place-items:center}
+.icon:focus-visible,.chip:focus-visible,.mic:focus-visible,.send:focus-visible{outline:2px solid var(--red);outline-offset:2px}
+
+.bottom{position:fixed;left:0;right:0;bottom:0;z-index:3;
+  padding:0 14px calc(env(safe-area-inset-bottom,0px) + 14px);display:flex;flex-direction:column;align-items:center;gap:10px}
+#caption{max-width:min(620px,100%);min-height:1.6em;text-align:center;font-size:1.15rem;line-height:1.5;
+  padding:10px 16px;border-radius:16px;background:var(--panel);backdrop-filter:blur(10px);border:1px solid var(--line);
+  max-height:28vh;overflow:auto}
+#caption:empty{display:none}
+#caption.you{color:var(--mute);font-size:1rem}
+.chips{display:flex;gap:6px;flex-wrap:wrap;justify-content:center}
+.chip{border:1px solid var(--line);background:var(--panel);border-radius:999px;padding:4px 12px;font-size:.85rem;color:var(--mute)}
+.chip.on{color:var(--ink);border-color:var(--red)}
+.dock{display:flex;gap:8px;width:min(620px,100%);align-items:center}
+.dock input{flex:1;min-width:0;height:48px;border-radius:24px;border:1px solid var(--line);background:var(--panel);
+  backdrop-filter:blur(10px);color:var(--ink);padding:0 18px;font:inherit;font-size:1rem}
+.dock input::placeholder{color:var(--mute)}
+.mic{width:56px;height:56px;border-radius:50%;border:0;background:var(--red);color:#fff;display:grid;place-items:center;flex:none;
+  transition:transform .15s}
+.mic.on{animation:pulse 1.2s infinite}
+.send{width:48px;height:48px;border-radius:50%;border:1px solid var(--line);background:var(--panel);display:grid;place-items:center;flex:none}
+@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(224,69,95,.6)}100%{box-shadow:0 0 0 20px rgba(224,69,95,0)}}
+@media (prefers-reduced-motion:reduce){.mic.on{animation:none}}
+
+dialog{border:1px solid var(--line);border-radius:20px;background:#1e162c;color:var(--ink);width:min(440px,92vw);padding:20px}
+dialog::backdrop{background:rgba(0,0,0,.6)}
+dialog h2{margin:0 0 12px;font-size:1.25rem}
+label{display:block;margin:12px 0 4px;font-size:.9rem;color:var(--mute)}
+dialog input,dialog select,dialog textarea{width:100%;background:#120d1c;border:1px solid var(--line);border-radius:10px;color:var(--ink);
+  padding:9px 12px;font:inherit}
+dialog textarea{min-height:70px;resize:vertical}
+.row{display:flex;gap:8px;margin-top:18px;justify-content:flex-end}
+.btn{border:1px solid var(--line);background:transparent;border-radius:10px;padding:8px 16px}
+.btn.primary{background:var(--red);border-color:var(--red);color:#fff;font-weight:600}
+.note{font-size:.8rem;color:var(--mute);margin-top:10px;line-height:1.5}
+</style>
+</head>
+<body>
+<div id="stage"><canvas id="canvas"></canvas></div>
+<div id="loading">मॉडल लोड हो रहा है…</div>
+
+<div class="top">
+  <div class="badge"><span class="dot" id="dot"></span><span id="status">तैयार</span></div>
+  <button class="icon" id="openSettings" aria-label="सेटिंग्स">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+  </button>
+</div>
+
+<div class="bottom">
+  <div id="caption" aria-live="polite"></div>
+  <div class="chips" id="chips"></div>
+  <form class="dock" id="form">
+    <input id="text" type="text" autocomplete="off" placeholder="यहाँ लिखें या माइक दबाकर बोलें">
+    <button type="button" class="mic" id="mic" aria-label="बोलना शुरू करें">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+    </button>
+    <button type="submit" class="send" aria-label="भेजें">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4z"/></svg>
+    </button>
+  </form>
+</div>
+
+<dialog id="settings">
+  <h2>सेटिंग्स</h2>
+  <p class="note" style="margin:0 0 4px">बोलने के लिए Gemini API key चाहिए (फ्री)। <b>aistudio.google.com/apikey</b> पर जाकर "Create API key" दबाएँ, key कॉपी करके यहाँ पेस्ट करें। key सिर्फ़ आपके ब्राउज़र में सेव होती है (GitHub पर नहीं)।</p>
+  <label for="sKey">Gemini API key</label>
+  <input id="sKey" type="password" autocomplete="off" placeholder="AIza...">
+  <label for="sModel">चैट मॉडल (error आए तो बदल सकते हैं)</label>
+  <input id="sModel" placeholder="gemini-2.5-flash">
+  <label for="sTts">आवाज़ वाला मॉडल</label>
+  <input id="sTts" placeholder="gemini-2.5-flash-preview-tts">
+  <label for="sVoice">असिस्टेंट की आवाज़ (मेल)</label>
+  <select id="sVoice">
+    <option value="Charon">Charon (गहरी, समझदार)</option>
+    <option value="Orus">Orus (दमदार)</option>
+    <option value="Fenrir">Fenrir (जोशीली)</option>
+    <option value="Puck">Puck (चुलबुली)</option>
+    <option value="Achird">Achird (दोस्ताना)</option>
+    <option value="Algieba">Algieba (स्मूद)</option>
+    <option value="Iapetus">Iapetus (साफ़)</option>
+    <option value="Umbriel">Umbriel (आरामदायक)</option>
+  </select>
+  <label for="sName">असिस्टेंट का नाम</label>
+  <input id="sName" placeholder="जैसे: कबीर">
+  <label for="sLang">माइक की भाषा</label>
+  <select id="sLang">
+    <option value="hi-IN">हिन्दी / Hinglish</option>
+    <option value="en-IN">English (India)</option>
+    <option value="en-US">English (US)</option>
+  </select>
+  <label for="sPersona">व्यक्तित्व (system prompt)</label>
+  <textarea id="sPersona"></textarea>
+  <div class="row" style="justify-content:space-between">
+    <button class="btn" id="sClear" type="button">🗑 चैट साफ़ करो</button>
+    <span style="display:flex;gap:8px">
+      <button class="btn" id="sClose" type="button">बंद करें</button>
+      <button class="btn primary" id="sSave" type="button">सेव करें</button>
+    </span>
+  </div>
+</dialog>
+
+<script src="https://cubism.live2d.com/sdk-web/cubismcore/live2dcubismcore.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/pixi.js@6.5.10/dist/browser/pixi.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/pixi-live2d-display@0.4.0/dist/cubism4.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

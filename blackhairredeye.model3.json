@@ -1,0 +1,29 @@
+{
+	"Version": 3,
+	"FileReferences": {
+		"Moc": "BlackHairRedEye.moc3",
+		"Textures": [
+			"texture_00.png"
+		],
+		"Physics": "BlackHairRedEye.physics3.json",
+		"DisplayInfo": "BlackHairRedEye.cdi3.json",
+		"Expressions": [
+			{
+				"Name": "Angry",
+				"File": "Angry.exp3.json"
+			},
+			{
+				"Name": "Blush",
+				"File": "Blush.exp3.json"
+			}
+		]
+	},
+	"Groups": [
+		{
+			"Target": "Parameter",
+			"Name": "EyeBlink",
+			"Ids": []
+		}
+	],
+	"HitAreas": []
+}
