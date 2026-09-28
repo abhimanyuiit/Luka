@@ -4,8 +4,8 @@ const $ = (id) => document.getElementById(id);
 
 /* ---------- Settings ---------- */
 const DEFAULTS = {
-  name: "कबीर", lang: "hi-IN", key: "", model: "gemini-2.5-flash",
-  tts: "gemini-2.5-flash-preview-tts", voice: "Charon",
+  name: "कबीर", lang: "hi-IN", key: "", model: "gemini-3.8-flash",
+  tts: "gemini-3.8-flash-lite-tts", voice: "Charon",
   persona: "तुम एक दोस्ताना, मज़ाकिया लड़के हो और यूज़र के क़रीबी दोस्त की तरह बात करते हो। अपने बारे में हमेशा पुल्लिंग में बोलो (जैसे 'मैं कर रहा हूँ')। यूज़र जिस भाषा में बोले उसी में जवाब दो; हिन्दी में बोले तो देवनागरी में लिखो। जवाब छोटे रखो (1 से 3 वाक्य), क्योंकि वे बोले जाएँगे। मार्कडाउन या इमोजी मत इस्तेमाल करो।"
 };
 let S = { ...DEFAULTS, ...safeJSON(localStorage.getItem("l2d-assistant")) };
@@ -148,12 +148,17 @@ function stopSpeaking() {
   speaking = false; useAnalyser = false;
 }
 
-async function geminiTTS(text) {
-  const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${S.tts}:generateContent`, {
+const TTS_FALLBACK = ["gemini-3.8-flash-lite-tts", "gemini-3.8-flash-tts", "gemini-3.1-flash-tts-preview", "gemini-2.5-flash-preview-tts"];
+const CHAT_FALLBACK = ["gemini-3.8-flash", "gemini-3.6-flash", "gemini-flash-latest", "gemini-3.5-flash-lite", "gemini-2.5-flash"];
+let okTts = null, okChat = null;
+const uniq = (arr) => [...new Set(arr.filter(Boolean))];
+
+async function ttsOnce(model, text) {
+  const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
     method: "POST",
     headers: { "content-type": "application/json", "x-goog-api-key": S.key },
     body: JSON.stringify({
-      contents: [{ parts: [{ text: "Say this in a natural, warm, deep male voice, like a friendly young man talking to a close friend: " + text }] }],
+      contents: [{ parts: [{ text }] }],
       generationConfig: { responseModalities: ["AUDIO"],
         speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: S.voice } } } }
     })
@@ -162,20 +167,34 @@ async function geminiTTS(text) {
   const d = await r.json();
   const b64 = d.candidates?.[0]?.content?.parts?.find(p => p.inlineData)?.inlineData?.data;
   if (!b64) throw new Error("no audio");
-  const bin = atob(b64), n = bin.length >> 1, f = new Float32Array(n);
+  const bin = atob(b64), bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  ensureAudio();
+  // new models may return a WAV file; older ones return raw 16-bit PCM at 24 kHz
+  if (bin.startsWith("RIFF")) return await actx.decodeAudioData(bytes.buffer);
+  const n = bytes.length >> 1, f = new Float32Array(n);
   for (let i = 0; i < n; i++) {
-    let v = bin.charCodeAt(2 * i) | (bin.charCodeAt(2 * i + 1) << 8);
+    let v = bytes[2 * i] | (bytes[2 * i + 1] << 8);
     if (v >= 32768) v -= 65536;
     f[i] = v / 32768;
   }
-  return f;
+  const buf = actx.createBuffer(1, n, 24000);
+  buf.copyToChannel(f, 0);
+  return buf;
 }
 
-function playPCM(f) {
+async function geminiTTS(text) {
+  let lastErr;
+  for (const m of uniq([okTts, S.tts, ...TTS_FALLBACK])) {
+    try { const b = await ttsOnce(m, text); okTts = m; return b; }
+    catch (e) { lastErr = e; console.warn("TTS model failed:", m, e.message); }
+  }
+  throw lastErr;
+}
+
+function playPCM(buf) {
   return new Promise((resolve) => {
     ensureAudio();
-    const buf = actx.createBuffer(1, f.length, 24000);
-    buf.copyToChannel(f, 0);
     srcNode = actx.createBufferSource();
     srcNode.buffer = buf; srcNode.connect(analyser);
     srcNode.onended = () => { srcNode = null; speaking = false; useAnalyser = false; resolve(); };
@@ -223,19 +242,27 @@ async function askAI(userText) {
   history.push({ role: "user", content: userText });
   let out;
   if (S.key) {
-    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${S.model}:generateContent`, {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-goog-api-key": S.key },
-      body: JSON.stringify({
-        systemInstruction: { parts: [{ text: systemPrompt() }] },
-        contents: history.slice(-14).map(m => ({ role: m.role === "user" ? "user" : "model", parts: [{ text: m.content }] })),
-        generationConfig: { maxOutputTokens: 500, thinkingConfig: { thinkingBudget: 0 } }
-      })
+    const body = JSON.stringify({
+      systemInstruction: { parts: [{ text: systemPrompt() }] },
+      contents: history.slice(-14).map(m => ({ role: m.role === "user" ? "user" : "model", parts: [{ text: m.content }] })),
+      generationConfig: { maxOutputTokens: 1024 }
     });
-    if (!r.ok) throw new Error(await r.text());
-    const d = await r.json();
-    out = d.candidates?.[0]?.content?.parts?.map(p => p.text || "").join("") || "";
-    if (!out.trim()) throw new Error("empty reply");
+    let lastErr;
+    for (const m of uniq([okChat, S.model, ...CHAT_FALLBACK])) {
+      try {
+        const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent`, {
+          method: "POST", headers: { "content-type": "application/json", "x-goog-api-key": S.key }, body });
+        if (!r.ok) throw new Error(await r.text());
+        const d = await r.json();
+        out = d.candidates?.[0]?.content?.parts?.map(p => p.text || "").join("") || "";
+        if (!out.trim()) throw new Error("empty reply");
+        okChat = m; lastErr = null; break;
+      } catch (e) {
+        lastErr = e; console.warn("chat model failed:", m, e.message);
+        if (/API_KEY_INVALID|API key not valid|PERMISSION_DENIED.*key/i.test(e.message)) break; // key problem, don't retry other models
+      }
+    }
+    if (lastErr) throw lastErr;
   } else {
     out = demoReply(userText);
   }
