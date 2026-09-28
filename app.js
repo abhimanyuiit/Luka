@@ -47,7 +47,7 @@ function setStatus(state, text) {
 }
 
 /* ---------- Live2D ---------- */
-let app, model;
+let app, model, lastMove = 0;
 async function initModel() {
   window.PIXI = PIXI;
   PIXI.live2d.Live2DModel.registerTicker(PIXI.Ticker);
@@ -61,8 +61,10 @@ async function initModel() {
   layout();
   window.addEventListener("resize", layout);
   window.addEventListener("pointermove", (e) => {
+    if (e.pointerType !== "mouse") return; // touch se sir neeche na jhuke
     const r = $("canvas").getBoundingClientRect();
     model.focus(e.clientX - r.left, e.clientY - r.top);
+    lastMove = performance.now();
   });
   // Runs every frame right before the model is drawn
   model.internalModel.on("beforeModelUpdate", animate);
@@ -84,6 +86,9 @@ function animate() {
   const now = performance.now(), t = (now - t0) / 1000;
   const set = (id, v) => core.setParameterValueById(id, v);
   const add = (id, v) => core.setParameterValueById(id, core.getParameterValueById(id) + v);
+
+  // pointer idle -> look straight ahead
+  if (now - lastMove > 2000) model.internalModel.focusController.focus(0, 0);
 
   // smooth expression blending
   for (const p of PARAMS) cur[p] = lerp(cur[p], target[p], 0.12);
@@ -253,16 +258,18 @@ async function handleUser(text) {
   showCaption(text, true);
   setExpression("thinking");
   setStatus("thinking", "सोच रहा हूँ");
-  let reply;
+  let reply, errDetail = "";
   try { reply = await askAI(text); }
   catch (e) {
     console.error(e);
+    errDetail = String(e.message || e);
+    try { errDetail = JSON.parse(errDetail).error.message; } catch {}
     reply = "[sad] सॉरी यार, AI से जुड़ नहीं पाया। Gemini API key और मॉडल का नाम सेटिंग्स में चेक कर लो।";
   }
   const m = reply.match(/^\s*\[(\w+)\]\s*/);
   const emo = m && EXPR[m[1].toLowerCase()] ? m[1].toLowerCase() : "neutral";
   const clean = reply.replace(/\[(\w+)\]/g, "").trim();
-  showCaption(clean, false);
+  showCaption(errDetail ? clean + "\n\nकारण: " + errDetail.slice(0, 220) : clean, false);
   setExpression(emo);
   await speak(clean);
   setStatus("", "तैयार");
